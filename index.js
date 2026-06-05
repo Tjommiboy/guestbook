@@ -17,6 +17,7 @@ import {
   addDoc,
   serverTimestamp,
   increment,
+  arrayUnion,
 } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -51,22 +52,32 @@ onAuthStateChanged(auth, (user) => {
   render();
 });
 
+// ============================================
+// EVENT HANDLER REGISTRY
+// ============================================
+const eventHandlers = {
+  like: (tweetId) => handleLikeClick(tweetId),
+  retweet: (tweetId) => handleRetweetClick(tweetId),
+  reply: (tweetId) => handleReplyClick(tweetId),
+  replySubmit: (tweetId) => handleReplySubmit(tweetId),
+  "tweet-btn": () => handleTweetBtnClick(),
+  "sign-in-btn": () => signIn(),
+  "sign-out-btn": () => signOutUser(),
+};
+
 document.addEventListener("click", function (e) {
-  if (e.target.dataset.like) {
-    handleLikeClick(e.target.dataset.like);
-  } else if (e.target.dataset.retweet) {
-    handleRetweetClick(e.target.dataset.retweet);
-  } else if (e.target.dataset.reply) {
-    handleReplyClick(e.target.dataset.reply);
-  } else if (e.target.id === "tweet-btn") {
-    handleTweetBtnClick();
-  } else if (e.target.id === "sign-in-btn") {
-    signIn();
-  } else if (e.target.id === "sign-out-btn") {
-    signOutUser();
-  }
+  // Check dataset attributes
+  if (e.target.dataset.like) eventHandlers.like(e.target.dataset.like);
+  else if (e.target.dataset.retweet) eventHandlers.retweet(e.target.dataset.retweet);
+  else if (e.target.dataset.reply) eventHandlers.reply(e.target.dataset.reply);
+  else if (e.target.dataset.replySubmit) eventHandlers.replySubmit(e.target.dataset.replySubmit);
+  // Check element IDs
+  else if (e.target.id in eventHandlers) eventHandlers[e.target.id]();
 });
 
+// ============================================
+// LIKE & RETWEET HANDLERS
+// ============================================
 async function handleLikeClick(tweetId) {
   const targetTweetObj = tweetsData.find((tweet) => tweet.id === tweetId);
   if (!targetTweetObj) return;
@@ -89,18 +100,87 @@ async function handleRetweetClick(tweetId) {
   });
 }
 
+// ============================================
+// REPLY HANDLERS
+// ============================================
 function handleReplyClick(replyId) {
   document.getElementById(`replies-${replyId}`).classList.toggle("hidden");
 }
 
+async function handleReplySubmit(tweetId) {
+  if (!currentUser) return;
+
+  const replyInput = document.querySelector(`[data-reply-input="${tweetId}"]`);
+  if (!replyInput || !replyInput.value.trim()) return;
+
+  const displayName =
+    currentUser.displayName ||
+    (currentUser.email && currentUser.email.split("@")[0]) ||
+    "anonymous";
+  const handleName = displayName.startsWith("@")
+    ? displayName
+    : `@${displayName.replace(/\s+/g, "")}`;
+  const profilePic = currentUser.photoURL || "images/scrimbalogo.png";
+
+  const tweetDocRef = doc(db, "tweets", tweetId);
+  await updateDoc(tweetDocRef, {
+    replies: arrayUnion({
+      handle: handleName,
+      profilePic: profilePic,
+      tweetText: replyInput.value.trim(),
+      createdAt: new Date(),
+    }),
+  });
+
+  replyInput.value = "";
+}
+
+// ============================================
+// UTILITY FUNCTIONS
+// ============================================
+function formatTimestamp(createdAt) {
+  if (!createdAt) return "";
+
+  let date;
+  if (createdAt.toDate) {
+    date = createdAt.toDate();
+  } else if (createdAt instanceof Date) {
+    date = createdAt;
+  } else if (typeof createdAt === "string") {
+    date = new Date(createdAt);
+  } else {
+    return "";
+  }
+
+  const hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  const hour12 = hours % 12 || 12;
+  return `${hour12}:${minutes} ${ampm}`;
+}
+
+// ============================================
+// TWEET HANDLERS
+// ============================================
 async function handleTweetBtnClick() {
   const tweetInput = document.getElementById("tweet-input");
 
   if (!tweetInput.value) return;
 
+  const displayName =
+    (currentUser &&
+      (currentUser.displayName ||
+        (currentUser.email && currentUser.email.split("@")[0]))) ||
+    "anonymous";
+  const handleName = displayName.startsWith("@")
+    ? displayName
+    : `@${displayName.replace(/\s+/g, "")}`;
+  const profilePic =
+    (currentUser && currentUser.photoURL) || "images/scrimbalogo.png";
+
   await addDoc(tweetsCollection, {
-    handle: "@Scrimba",
-    profilePic: "images/scrimbalogo.png",
+    handle: handleName,
+    profilePic: profilePic,
     likes: 0,
     retweets: 0,
     tweetText: tweetInput.value,
@@ -113,6 +193,9 @@ async function handleTweetBtnClick() {
   tweetInput.value = "";
 }
 
+// ============================================
+// AUTH HANDLERS
+// ============================================
 function signIn() {
   signInWithPopup(auth, provider);
 }
@@ -121,6 +204,9 @@ function signOutUser() {
   signOut(auth);
 }
 
+// ============================================
+// RENDER FUNCTIONS
+// ============================================
 function getFeedHtml() {
   let feedHtml = "";
 
@@ -142,9 +228,10 @@ function getFeedHtml() {
 <div class="tweet-reply">
   <div class="tweet-inner">
     <img src="${reply.profilePic}" class="profile-pic">
-    <div>
+  <div class="tweet-reply-content">
       <p class="handle">${reply.handle}</p>
       <p class="tweet-text">${reply.tweetText}</p>
+      <p class="tweet-time">${formatTimestamp(reply.createdAt)}</p>
     </div>
   </div>
 </div>
@@ -158,6 +245,7 @@ function getFeedHtml() {
     <img src="${tweet.profilePic}" class="profile-pic">
     <div>
       <p class="handle">${tweet.handle}</p>
+      <p class="tweet-time">${formatTimestamp(tweet.createdAt)}</p>
       <p class="tweet-text">${tweet.tweetText}</p>
       <div class="tweet-details">
         <span class="tweet-detail">
@@ -177,6 +265,20 @@ function getFeedHtml() {
   </div>
   <div class="hidden" id="replies-${tweet.id}">
     ${repliesHtml}
+    <div class="reply-form">
+      <textarea
+        class="reply-input"
+        data-reply-input="${tweet.id}"
+        placeholder="Write a reply..."
+        ${currentUser ? "" : "disabled"}
+      ></textarea>
+      <button
+        class="reply-submit"
+        data-reply-submit="${tweet.id}"
+        ${currentUser ? "" : "disabled"}
+      >Reply</button>
+      ${currentUser ? "" : '<p class="reply-login-text">Sign in to reply.</p>'}
+    </div>
   </div>
 </div>
 `;
@@ -220,6 +322,14 @@ function render() {
   if (tweetBtn) {
     tweetBtn.disabled = !currentUser;
     tweetBtn.textContent = currentUser ? "Post" : "Sign in to post";
+  }
+
+  const inputProfilePic = document.getElementById("input-profile-pic");
+  if (inputProfilePic) {
+    inputProfilePic.src =
+      currentUser && currentUser.photoURL
+        ? currentUser.photoURL
+        : "images/scrimbalogo.png";
   }
 
   document.getElementById("feed").innerHTML = getFeedHtml();
